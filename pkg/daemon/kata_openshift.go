@@ -10,10 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containers/image/v5/copy"
-	"github.com/containers/image/v5/signature"
-	"github.com/containers/image/v5/transports/alltransports"
+	"github.com/containers/image/copy"
+	"github.com/containers/image/signature"
+	"github.com/containers/image/transports/alltransports"
 	"github.com/opencontainers/image-tools/image"
+
 	kataTypes "github.com/openshift/kata-operator/pkg/apis/kataconfiguration/v1alpha1"
 	kataClient "github.com/openshift/kata-operator/pkg/generated/clientset/versioned"
 )
@@ -47,7 +48,7 @@ func (k *KataOpenShift) Install(kataConfigResourceName string) error {
 		k.KataInstallChecker = func() (bool, error) {
 			var isKataInstalled bool
 			var err error
-			if _, err := os.Stat("/host/opt/kata-runtime"); err == nil {
+			if _, err := os.Stat("/host/usr/bin/kata-runtime"); err == nil {
 				isKataInstalled = true
 				err = nil
 			} else if os.IsNotExist(err) {
@@ -175,7 +176,7 @@ func installRPMs() error {
 	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
 	log.SetOutput(os.Stdout)
 
-	if _, err := os.Stat("/host/usr/bin/kata-runtime"); err != nil {
+	if _, err := os.Stat("/host/usr/bin/kata-runtime"); err == nil {
 		return nil
 	}
 
@@ -214,7 +215,7 @@ func installRPMs() error {
 
 	_, err = copy.Image(context.Background(), policyContext, destRef, srcRef, &copy.Options{})
 	err = image.CreateRuntimeBundleLayout("/opt/kata-install/kata-image/",
-		"/usr/local/kata", "latest", "linux", []string{"v1.0"})
+		"/usr/local/kata", "latest", "linux", []string{"name=latest"})
 	if err != nil {
 		fmt.Println("error creating Runtime bundle layout in /usr/local/kata")
 		return err
@@ -226,27 +227,14 @@ func installRPMs() error {
 		return err
 	}
 
-	cmd = exec.Command("/usr/bin/cp", "-f", "/usr/local/kata/linux/packages.repo",
+	cmd = exec.Command("/usr/bin/cp", "-f", "/usr/local/kata/latest/packages.repo",
 		"/etc/yum.repos.d/")
 	if err := doCmd(cmd); err != nil {
 		return err
 	}
 
-	cmd = exec.Command("/usr/bin/cp", "-f", "/usr/local/kata/linux/katainstall.service",
-		"/etc/systemd/system/katainstall.service")
-	if err := doCmd(cmd); err != nil {
-		return err
-	}
-
-	cmd = exec.Command("/usr/bin/cp", "-f",
-		"/usr/local/kata/linux/install_kata_packages.sh",
-		"/opt/kata-install/install_kata_packages.sh")
-	if err := doCmd(cmd); err != nil {
-		return err
-	}
-
 	cmd = exec.Command("/usr/bin/cp", "-a",
-		"/usr/local/kata/linux/packages", "/opt/kata-install/packages")
+		"/usr/local/kata/latest/packages", "/opt/kata-install/packages")
 	if err = doCmd(cmd); err != nil {
 		return err
 	}
