@@ -421,7 +421,7 @@ func installRPMs() error {
 	if err != nil {
 		fmt.Println(err)
 	}
-	srcRef, err := alltransports.ParseImageName("docker://quay.io/jensfr/kata-artifacts:v2.0")
+	srcRef, err := alltransports.ParseImageName("docker://quay.io/isolatedcontainers/kata-operator-payload:v1.0")
 	if err != nil {
 		fmt.Println("Invalid source name")
 		return err
