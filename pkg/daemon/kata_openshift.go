@@ -95,7 +95,7 @@ func (k *KataOpenShift) Install(kataConfigResourceName string) error {
 
 	if isKataInstalled {
 		// kata exist - mark completion if crio drop in file exists
-		if _, err := os.Stat("/host/opt/kata-1.conf"); err == nil {
+		if _, err := os.Stat("/host/usr/bin/kata-runtime"); err == nil {
 			err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
 				ks.InstallationStatus.Completed.CompletedNodesList = append(ks.InstallationStatus.Completed.CompletedNodesList, nodeName)
 				ks.InstallationStatus.Completed.CompletedNodesCount = len(ks.InstallationStatus.Completed.CompletedNodesList)
@@ -232,7 +232,7 @@ func (k *KataOpenShift) Uninstall(kataConfigResourceName string) error {
 	}
 	if isKataUnInstalled {
 		// Kata is uninstalled
-		if _, err := os.Stat("/host/opt/kata-1.conf"); err != nil {
+		if _, err := os.Stat("/host/usr/bin/kata-runtime"); err != nil {
 			// crio drop in config is not removed yet. We will wait.
 			return nil
 		} else if os.IsNotExist(err) {
@@ -388,16 +388,64 @@ func rpmostreeOverrideReplace(rpms string) error {
 }
 
 func uninstallRPMs() error {
-	return fmt.Errorf("Not Implemented Yet")
+        fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
+        log.SetOutput(os.Stdout)
+
+//        if _, err := os.Stat("/host/usr/bin/kata-runtime"); err != nil {
+//                log.Println("kata seems to be not installed here")
+//                return nil
+//        }
+
+        cmd := exec.Command("/bin/rm", "-rf", "/host/opt/kata-install")
+        err := doCmd(cmd)
+        if err != nil {
+                return err
+        }
+
+//        cmd = exec.Command("/bin/rm", "-rf", "/host/opt/kata-install-daemon") //temporary, dev-only
+//        err = doCmd(cmd)
+//        if err != nil {
+//                return err
+//        }
+
+        cmd = exec.Command("/bin/rm", "-rf", "/usr/local/kata")
+        err = doCmd(cmd)
+        if err != nil {
+                return err
+        }
+
+        if err := syscall.Chroot("/host"); err != nil {
+                log.Fatalf("Unable to chroot to %s: %s", "/host", err)
+        }
+
+        if err := syscall.Chdir("/"); err != nil {
+                log.Fatalf("Unable to chdir to %s: %s", "/", err)
+        }
+
+
+        cmd = exec.Command("rpm-ostree", "uninstall", "--idempotent", "--all") //FIXME not -a but kata-runtime, kata-osbuilder,...
+        err = doCmd(cmd)
+        if err != nil {
+                return err
+        }
+
+        cmd = exec.Command("rpm-ostree", "override", "reset", "-a") //FIXME not -a but kata-runtime, kata-osbuilder,...
+        err = doCmd(cmd)
+        if err != nil {
+
+        }
+
+	return nil
 }
 
 func installRPMs() error {
 	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
-	log.SetOutput(os.Stdout)
+	log.SetOutput(os.Stderr)
 
-	if _, err := os.Stat("/host/usr/bin/kata-runtime"); err != nil {
+	if _, err := os.Stat("/host/usr/bin/kata-runtime"); err == nil {
 		return nil
 	}
+	fmt.Fprintf(os.Stderr, "after check vor kata-runtime\n")
 
 	cmd := exec.Command("mkdir", "-p", "/host/opt/kata-install")
 	err := doCmd(cmd)
@@ -434,7 +482,7 @@ func installRPMs() error {
 
 	_, err = copy.Image(context.Background(), policyContext, destRef, srcRef, &copy.Options{})
 	err = image.CreateRuntimeBundleLayout("/opt/kata-install/kata-image/",
-		"/usr/local/kata", "latest", "linux", []string{"v1.0"})
+		"/usr/local/kata", "latest", "linux", []string{"name=latest"})
 	if err != nil {
 		fmt.Println("error creating Runtime bundle layout in /usr/local/kata")
 		return err
@@ -446,12 +494,13 @@ func installRPMs() error {
 		return err
 	}
 
-	cmd = exec.Command("/usr/bin/cp", "-f", "/usr/local/kata/linux/packages.repo",
+	cmd = exec.Command("/usr/bin/cp", "-f", "/usr/local/kata/latest/packages.repo",
 		"/etc/yum.repos.d/")
 	if err := doCmd(cmd); err != nil {
 		return err
 	}
 
+/*
 	cmd = exec.Command("/usr/bin/cp", "-f", "/usr/local/kata/linux/katainstall.service",
 		"/etc/systemd/system/katainstall.service")
 	if err := doCmd(cmd); err != nil {
@@ -464,9 +513,10 @@ func installRPMs() error {
 	if err := doCmd(cmd); err != nil {
 		return err
 	}
+*/
 
 	cmd = exec.Command("/usr/bin/cp", "-a",
-		"/usr/local/kata/linux/packages", "/opt/kata-install/packages")
+		"/usr/local/kata/latest/packages", "/opt/kata-install/packages")
 	if err = doCmd(cmd); err != nil {
 		return err
 	}
@@ -475,9 +525,9 @@ func installRPMs() error {
 		return err
 	}
 
-	if err := rpmostreeOverrideReplace("kernel-*.rpm"); err != nil {
-		return err
-	}
+//	if err := rpmostreeOverrideReplace("kernel-*.rpm"); err != nil {
+//		return err
+//	}
 	if err := rpmostreeOverrideReplace("{rdma-core-*.rpm,libibverbs*.rpm}"); err != nil {
 		return err
 	}
