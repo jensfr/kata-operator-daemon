@@ -12,6 +12,7 @@ import (
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/transports/alltransports"
 	"github.com/opencontainers/image-tools/image"
+	"github.com/openshift/kata-operator/pkg/apis/kataconfiguration/v1alpha1"
 	kataTypes "github.com/openshift/kata-operator/pkg/apis/kataconfiguration/v1alpha1"
 	kataClient "github.com/openshift/kata-operator/pkg/generated/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
@@ -95,7 +96,8 @@ func (k *KataOpenShift) Install(kataConfigResourceName string) error {
 	if isKataInstalled {
 		// kata exist - mark completion if crio drop in file exists
 		if k.CRIODropinPath == "" {
-			k.CRIODropinPath = "/host/etc/crio/crio.conf.d/kata-50.conf"
+			//k.CRIODropinPath = "/host/etc/crio/crio.conf.d/kata-50.conf"
+			k.CRIODropinPath = "/opt/kata-installed"
 		}
 		if _, err := os.Stat(k.CRIODropinPath); err == nil {
 			err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
@@ -134,7 +136,7 @@ func (k *KataOpenShift) Install(kataConfigResourceName string) error {
 			return fmt.Errorf("kata is not installed on the node, error updating kataconfig status %+v", err)
 		}
 
-		err = k.KataBinaryInstaller()
+		err = k.KataBinaryInstaller(kataconfig)
 
 		if err != nil {
 			// kata installation failed. report it.
@@ -302,51 +304,63 @@ func rpmostreeOverrideReplace(rpms string) error {
 }
 
 func uninstallRPMs() error {
-        fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
-        log.SetOutput(os.Stdout)
+	cmd := exec.Command("rm", "-rf", "/opt/kata-installed")
+	err := doCmd(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
+	log.SetOutput(os.Stdout)
 
-        if err := syscall.Chroot("/host"); err != nil {
-                log.Fatalf("Unable to chroot to %s: %s", "/host", err)
-        }
+	if err := syscall.Chroot("/host"); err != nil {
+		log.Fatalf("Unable to chroot to %s: %s", "/host", err)
+	}
 
-        if err := syscall.Chdir("/"); err != nil {
-                log.Fatalf("Unable to chdir to %s: %s", "/", err)
-        }
+	if err := syscall.Chdir("/"); err != nil {
+		log.Fatalf("Unable to chdir to %s: %s", "/", err)
+	}
 
-        cmd := exec.Command("/usr/bin/rm", "-rf", "/opt/kata-install")
-        err := doCmd(cmd)
-        if err != nil {
-                return err
-        }
+	cmd = exec.Command("/usr/bin/rm", "-rf", "/opt/kata-install")
+	err = doCmd(cmd)
+	if err != nil {
+		return err
+	}
 
-        cmd = exec.Command("/usr/bin/rm", "-rf", "/usr/local/kata")
-        err = doCmd(cmd)
-        if err != nil {
-                return err
-        }
+	cmd = exec.Command("/usr/bin/rm", "-rf", "/usr/local/kata")
+	err = doCmd(cmd)
+	if err != nil {
+		return err
+	}
 
+	cmd = exec.Command("rpm-ostree", "uninstall", "--idempotent", "--all") //FIXME not -a but kata-runtime, kata-osbuilder,...
+	err = doCmd(cmd)
+	if err != nil {
+		return err
+	}
 
-        cmd = exec.Command("rpm-ostree", "uninstall", "--idempotent", "--all") //FIXME not -a but kata-runtime, kata-osbuilder,...
-        err = doCmd(cmd)
-        if err != nil {
-                return err
-        }
+	cmd = exec.Command("rpm-ostree", "override", "reset", "-a") //FIXME not -a but kata-runtime, kata-osbuilder,...
+	err = doCmd(cmd)
+	if err != nil {
 
-        cmd = exec.Command("rpm-ostree", "override", "reset", "-a") //FIXME not -a but kata-runtime, kata-osbuilder,...
-        err = doCmd(cmd)
-        if err != nil {
-
-        }
+	}
 
 	return nil
 }
 
-func installRPMs() error {
+func installRPMs(k *v1alpha1.KataConfig) error {
+	cmd := exec.Command("touch", "/opt/kata-installed")
+	err := doCmd(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+
 	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
 	log.SetOutput(os.Stdout)
 
-	cmd := exec.Command("mkdir", "-p", "/host/opt/kata-install")
-	err := doCmd(cmd)
+	cmd = exec.Command("mkdir", "-p", "/host/opt/kata-install")
+	err = doCmd(cmd)
 	if err != nil {
 		return err
 	}
@@ -367,7 +381,8 @@ func installRPMs() error {
 	if err != nil {
 		fmt.Println(err)
 	}
-	srcRef, err := alltransports.ParseImageName("docker://quay.io/isolatedcontainers/kata-operator-payload:v1.0")
+	//srcRef, err := alltransports.ParseImageName("docker://quay.io/isolatedcontainers/kata-operator-payload:v1.0")
+	srcRef, err := alltransports.ParseImageName(k.Spec.KataPayloadImage)
 	if err != nil {
 		fmt.Println("Invalid source name")
 		return err
@@ -412,7 +427,7 @@ func installRPMs() error {
 		return err
 	}
 
-	cmd = exec.Command("/bin/bash", "-c", "/usr/bin/rpm-ostree install --idempotent kata-runtime kata-osbuilder")
+	cmd = exec.Command("/bin/bash", "-c", "/usr/bin/rpm-ostree install --idempotent kata-runtime kata-osbuilder kata-shim")
 	err = doCmd(cmd)
 	if err != nil {
 		return err
