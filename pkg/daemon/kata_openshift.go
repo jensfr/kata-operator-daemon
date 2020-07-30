@@ -23,7 +23,7 @@ import (
 type KataExistance func() (bool, bool, error)
 
 // KataBinaryOperation installs the kata binaries on the node
-type KataBinaryOperation func() error
+type KataBinaryOperation func(k *v1alpha1.KataConfig) error
 
 //KataOpenShift is used for KataActions on OpenShift cluster nodes
 type KataOpenShift struct {
@@ -96,8 +96,7 @@ func (k *KataOpenShift) Install(kataConfigResourceName string) error {
 	if isKataInstalled {
 		// kata exist - mark completion if crio drop in file exists
 		if k.CRIODropinPath == "" {
-			//k.CRIODropinPath = "/host/etc/crio/crio.conf.d/kata-50.conf"
-			k.CRIODropinPath = "/opt/kata-installed"
+			k.CRIODropinPath = "/host/etc/crio/crio.conf.d/50-kata.conf"
 		}
 		if _, err := os.Stat(k.CRIODropinPath); err == nil {
 			err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
@@ -127,7 +126,10 @@ func (k *KataOpenShift) Install(kataConfigResourceName string) error {
 		}
 
 	} else {
-		// kata doesn't exist, install it.
+		kataconfig, err := k.KataClientSet.KataconfigurationV1alpha1().KataConfigs(v1.NamespaceAll).Get(context.TODO(), kataConfigResourceName, metaV1.GetOptions{})
+		if err != nil {
+			return err
+		} // kata doesn't exist, install it.
 		err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
 			ks.InstallationStatus.InProgress.InProgressNodesCount++
 		})
@@ -233,6 +235,10 @@ func (k *KataOpenShift) Uninstall(kataConfigResourceName string) error {
 	}
 
 	if !isKataUnInstalled {
+		kataconfig, err := k.KataClientSet.KataconfigurationV1alpha1().KataConfigs(v1.NamespaceAll).Get(context.TODO(), kataConfigResourceName, metaV1.GetOptions{})
+		if err != nil {
+			return err
+		} // kata doesn't exist, install it.
 		// Kata binaries need to be uninstalled
 		err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
 			ks.UnInstallationStatus.InProgress.InProgressNodesCount++
@@ -246,9 +252,12 @@ func (k *KataOpenShift) Uninstall(kataConfigResourceName string) error {
 			k.KataBinaryUnInstaller = uninstallRPMs
 		}
 
-		err = k.KataBinaryUnInstaller()
+		fmt.Printf("Calling BinaryUnInstaller", nil)
+		err = k.KataBinaryUnInstaller(kataconfig)
+		fmt.Printf("BinaryUnInstaller exited", nil)
 
 		if err != nil {
+			fmt.Printf("failed BinaryUnInstaller", err)
 			// kata uninstallation failed. report it.
 			err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
 				ks.UnInstallationStatus.InProgress.InProgressNodesCount--
@@ -263,10 +272,11 @@ func (k *KataOpenShift) Uninstall(kataConfigResourceName string) error {
 			})
 
 			if err != nil {
-				return fmt.Errorf("kata installation failed, error updating kataconfig status %+v", err)
+				return fmt.Errorf("kata uninstall failed, error updating kataconfig status %+v", err)
 			}
 
 		}
+		fmt.Printf("marking one nodes as BinaryUninstallcompleted")
 		// mark binaries uninstalled
 		err = updateKataConfigStatus(k.KataClientSet, kataConfigResourceName, func(ks *kataTypes.KataConfigStatus) {
 			ks.UnInstallationStatus.InProgress.BinariesUnInstalledNodesList = append(ks.UnInstallationStatus.InProgress.BinariesUnInstalledNodesList, nodeName)
@@ -303,26 +313,9 @@ func rpmostreeOverrideReplace(rpms string) error {
 	return nil
 }
 
-func uninstallRPMs() error {
-	cmd := exec.Command("rm", "-rf", "/opt/kata-installed")
+func cleanupHost() error {
+	cmd := exec.Command("/usr/bin/rm", "-rf", "/opt/kata-install")
 	err := doCmd(cmd)
-	if err != nil {
-		return err
-	}
-	return nil
-	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
-	log.SetOutput(os.Stdout)
-
-	if err := syscall.Chroot("/host"); err != nil {
-		log.Fatalf("Unable to chroot to %s: %s", "/host", err)
-	}
-
-	if err := syscall.Chdir("/"); err != nil {
-		log.Fatalf("Unable to chdir to %s: %s", "/", err)
-	}
-
-	cmd = exec.Command("/usr/bin/rm", "-rf", "/opt/kata-install")
-	err = doCmd(cmd)
 	if err != nil {
 		return err
 	}
@@ -333,37 +326,12 @@ func uninstallRPMs() error {
 		return err
 	}
 
-	cmd = exec.Command("rpm-ostree", "uninstall", "--idempotent", "--all") //FIXME not -a but kata-runtime, kata-osbuilder,...
-	err = doCmd(cmd)
-	if err != nil {
-		return err
-	}
-
-	cmd = exec.Command("rpm-ostree", "override", "reset", "-a") //FIXME not -a but kata-runtime, kata-osbuilder,...
-	err = doCmd(cmd)
-	if err != nil {
-
-	}
-
 	return nil
 }
 
-func installRPMs(k *v1alpha1.KataConfig) error {
-	cmd := exec.Command("touch", "/opt/kata-installed")
-	err := doCmd(cmd)
-	if err != nil {
-		return err
-	}
-	return nil
-
-	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
+func uninstallRPMs(k *v1alpha1.KataConfig) error {
+	fmt.Fprintf(os.Stderr, "Uninstall: %s\n", os.Getenv("PATH"))
 	log.SetOutput(os.Stdout)
-
-	cmd = exec.Command("mkdir", "-p", "/host/opt/kata-install")
-	err = doCmd(cmd)
-	if err != nil {
-		return err
-	}
 
 	if err := syscall.Chroot("/host"); err != nil {
 		log.Fatalf("Unable to chroot to %s: %s", "/host", err)
@@ -371,6 +339,50 @@ func installRPMs(k *v1alpha1.KataConfig) error {
 
 	if err := syscall.Chdir("/"); err != nil {
 		log.Fatalf("Unable to chdir to %s: %s", "/", err)
+	}
+
+	err := cleanupHost()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cleanupHost failed\n")
+		return err
+	}
+
+	cmd := exec.Command("rpm-ostree", "uninstall", "--idempotent", "--all") //FIXME not -a but kata-runtime, kata-osbuilder,...
+	err = doCmd(cmd)
+	if err != nil {
+		return err
+	}
+	// cmd = exec.Command("rpm-ostree", "override", "reset", "-a") //FIXME not -a but kata-runtime, kata-osbuilder,...
+	// err = doCmd(cmd)
+	// if err != nil {
+	// }
+
+	fmt.Fprintf(os.Stderr, "Returning from uninstallRPMs\n")
+	return nil
+}
+
+func installRPMs(k *v1alpha1.KataConfig) error {
+	fmt.Fprintf(os.Stderr, "spec KATA_PAYLOAD_IMAGE= %s\n", k.Spec.KataPayloadImage)
+	fmt.Fprintf(os.Stderr, "status KATA_PAYLOAD_IMAGE= %s\n", k.Status.KataPayloadImage)
+	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("PATH"))
+	log.SetOutput(os.Stdout)
+
+	if err := syscall.Chroot("/host"); err != nil {
+		log.Fatalf("Unable to chroot to %s: %s", "/host", err)
+	}
+
+	if err := syscall.Chdir("/"); err != nil {
+		log.Fatalf("Unable to chdir to %s: %s", "/", err)
+	}
+
+	if err := cleanupHost(); err != nil {
+		fmt.Println(err)
+	}
+
+	cmd := exec.Command("mkdir", "-p", "/opt/kata-install")
+	err := doCmd(cmd)
+	if err != nil {
+		return err
 	}
 
 	policy, err := signature.DefaultPolicy(nil)
@@ -382,7 +394,7 @@ func installRPMs(k *v1alpha1.KataConfig) error {
 		fmt.Println(err)
 	}
 	//srcRef, err := alltransports.ParseImageName("docker://quay.io/isolatedcontainers/kata-operator-payload:v1.0")
-	srcRef, err := alltransports.ParseImageName(k.Spec.KataPayloadImage)
+	srcRef, err := alltransports.ParseImageName("docker://" + k.Spec.KataPayloadImage)
 	if err != nil {
 		fmt.Println("Invalid source name")
 		return err
@@ -416,14 +428,6 @@ func installRPMs(k *v1alpha1.KataConfig) error {
 	cmd = exec.Command("/usr/bin/cp", "-a",
 		"/usr/local/kata/latest/packages", "/opt/kata-install/packages")
 	if err = doCmd(cmd); err != nil {
-		return err
-	}
-
-	if err := rpmostreeOverrideReplace("linux-firmware-20191202-97.gite8a0f4c9.el8.noarch.rpm"); err != nil {
-		return err
-	}
-
-	if err := rpmostreeOverrideReplace("{rdma-core-*.rpm,libibverbs*.rpm}"); err != nil {
 		return err
 	}
 
